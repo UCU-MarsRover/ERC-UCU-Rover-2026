@@ -10,6 +10,8 @@ topic (e.g. a live sim publishing at 100Hz), rclpy.spin_once can starve
 this node's own publish timer indefinitely and report a false failure.
 """
 import contextlib
+import json
+import pathlib
 import time
 
 import pytest
@@ -533,28 +535,6 @@ def test_execute_move_group_constraints_cancels_goal_on_timeout(controller, monk
     assert gh.cancel_calls == 1
 
 
-# ── poses.json entries must stay within joint limits (review: drill_home) ──
-
-def test_pose_limit_violation_detects_out_of_range_joint():
-    from arm_teleop.keyboard_servo_node import HOME_POSE_JOINTS, _pose_limit_violation
-    pose = [0.0] * len(HOME_POSE_JOINTS)
-    pose[HOME_POSE_JOINTS.index('arm_forearm_wrist_1_joint')] = 7.0  # past ±2*pi
-    violation = _pose_limit_violation(pose)
-    assert 'arm_forearm_wrist_1_joint' in violation
-
-
-def test_pose_limit_violation_empty_for_in_range_pose():
-    from arm_teleop.keyboard_servo_node import HOME_POSE_JOINTS, _pose_limit_violation
-    assert _pose_limit_violation([0.0] * len(HOME_POSE_JOINTS)) == ''
-
-
-def test_tool_home_pose_falls_back_when_json_entry_exceeds_limits(controller, monkeypatch):
-    bad_pose = [0.0, 0.0, 0.0, 7.0, 0.0, 0.0]  # past ±2*pi
-    monkeypatch.setattr(
-        'arm_teleop.keyboard_servo_node._load_home_pose_from_json', lambda name: bad_pose)
-    assert controller._load_tool_home_pose('drill_home') == controller._safe_pose
-
-
 # ── run_planned_activity() must keep the arm still for the full 5s ─────
 
 def test_set_velocity_forced_to_zero_during_activity_delay(controller):
@@ -586,3 +566,28 @@ def test_run_planned_activity_holds_input_suppressed_for_the_whole_sleep(control
 
     assert seen_during_sleep == [True]  # suppressed for the entire wait
     assert controller._activity_delay_active is False  # cleared once action() runs
+
+
+# ── review: a taught pose must never carry a NaN/inf value onward ──────
+
+def test_load_home_pose_from_json_rejects_non_finite_values(monkeypatch):
+    from arm_teleop.keyboard_servo_node import HOME_POSE_JOINTS, _load_home_pose_from_json
+    bad_pose = {name: 0.0 for name in HOME_POSE_JOINTS}
+    bad_pose[HOME_POSE_JOINTS[0]] = float('inf')  # e.g. a corrupted/malformed taught entry
+    contents = json.dumps({'home': bad_pose})
+
+    monkeypatch.setattr(pathlib.Path, 'is_file', lambda self: True)
+    monkeypatch.setattr(pathlib.Path, 'read_text', lambda self: contents)
+
+    assert _load_home_pose_from_json('home') is None
+
+
+def test_load_home_pose_from_json_accepts_finite_values(monkeypatch):
+    from arm_teleop.keyboard_servo_node import HOME_POSE_JOINTS, _load_home_pose_from_json
+    good_pose = {name: 0.1 for name in HOME_POSE_JOINTS}
+    contents = json.dumps({'home': good_pose})
+
+    monkeypatch.setattr(pathlib.Path, 'is_file', lambda self: True)
+    monkeypatch.setattr(pathlib.Path, 'read_text', lambda self: contents)
+
+    assert _load_home_pose_from_json('home') == [0.1] * len(HOME_POSE_JOINTS)

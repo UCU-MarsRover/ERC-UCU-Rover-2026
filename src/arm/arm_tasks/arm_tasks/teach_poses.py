@@ -48,6 +48,7 @@ from pathlib import Path
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.node import Node
+from rclpy.utilities import remove_ros_args
 from sensor_msgs.msg import JointState
 from control_msgs.action import FollowJointTrajectory
 from controller_manager_msgs.srv import ListControllers, SwitchController
@@ -211,7 +212,10 @@ def main():
                         help="comma-separated joint names; default is the "
                              "gravity-aware order (wrists, elbow, shoulder, base)")
     sub.add_parser("list")
-    args = ap.parse_args()
+    # Strip a trailing --ros-args ... block (e.g. -r __ns:=/arm) before this
+    # parser sees argv — otherwise it reads as unrecognized arguments and
+    # exits before rclpy.init() ever gets a chance to apply the remap.
+    args = ap.parse_args(remove_ros_args(sys.argv)[1:])
 
     poses = json.loads(POSES_FILE.read_text()) if POSES_FILE.exists() else {}
 
