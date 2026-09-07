@@ -1,0 +1,11 @@
+name: Assign Contributors
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  call-assign:
+    uses: UCUSpaceRobotics/.github/.github/workflows/assign-pr-contributors.yml@main
+    permissions:
+      pull-requests: write
