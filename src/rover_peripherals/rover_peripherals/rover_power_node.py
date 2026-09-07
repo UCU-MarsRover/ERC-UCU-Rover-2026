@@ -390,8 +390,6 @@ class PowerMonitorCanNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    # Two groups, three threads: one service transaction at a time, with the
-    # CAN subscription always free to land the ACK it is waiting on.
     executor = MultiThreadedExecutor(num_threads=3)
     node = PowerMonitorCanNode()
     executor.add_node(node)
