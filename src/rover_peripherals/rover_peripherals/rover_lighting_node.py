@@ -50,13 +50,16 @@ from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.signals import SignalHandlerOptions
 
 from can_msgs.msg import Frame
 from std_srvs.srv import SetBool, Trigger
 from indomitus_interfaces.msg import LightsState as LightsStateMsg
 from indomitus_interfaces.srv import SetTrafficLight
 
+import signal
 import threading
+import time
 from dataclasses import replace
 from functools import partial
 from typing import Callable, NamedTuple
@@ -535,22 +538,25 @@ class LightsCanNode(Node):
 # ===========================================================================
 
 def main(args=None):
-    rclpy.init(args=args)
-    # Three groups, three threads: one service at a time, the CAN subscription
-    # always free to land the ACK it is waiting on, and the state timer.
+    rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
     executor = MultiThreadedExecutor(num_threads=3)
     node = LightsCanNode()
     executor.add_node(node)
+
+    def _stop(signum, frame):
+        executor.shutdown()
+
+    signal.signal(signal.SIGINT, _stop)
+    signal.signal(signal.SIGTERM, _stop)
+
     try:
         executor.spin()
     except (KeyboardInterrupt, ExternalShutdownException):
-        # ExternalShutdownException is the normal path when the launch file or
-        # a supervisor stops us - 'ros2 launch' tearing down its children,
-        # 'systemctl stop rover', etc. Catching it keeps the exit clean; either
-        # way the finally block below still runs and turns the tower off.
         pass
     finally:
-        node.turn_off_traffic_light()
+        if rclpy.ok():
+            node.turn_off_traffic_light()
+            time.sleep(0.1)
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
