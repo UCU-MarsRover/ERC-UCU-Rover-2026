@@ -582,13 +582,15 @@ hardware_interface::return_type ArmCanSystem::write(const rclcpp::Time&, const r
         // One combined snapshot of all 6 joints together, instead of each
         // motor logging independently as its own CAN frame happens to
         // arrive (staggered, arbitrary order) — much easier to read live.
+        // DEBUG, not INFO: this was spamming the default log output at 1 Hz;
+        // enable with --ros-args --log-level ArmCanSystem:=debug when needed.
         static rclcpp::Clock steady_clock(RCL_STEADY_TIME);
         std::array<float, NUM_JOINTS> torque_snapshot;
         {
             std::lock_guard<std::mutex> fb_lock(feedback_mutex_);
             torque_snapshot = last_torque_nm_;
         }
-        RCLCPP_INFO_THROTTLE(logger_, steady_clock, 1000,
+        RCLCPP_DEBUG_THROTTLE(logger_, steady_clock, 1000,
             "Torque (Nm): %s=%.2f  %s=%.2f  %s=%.2f  %s=%.2f  %s=%.2f  %s=%.2f",
             joint_names_[0].c_str(), torque_snapshot[0],
             joint_names_[1].c_str(), torque_snapshot[1],

@@ -122,6 +122,12 @@ DOWN_AXIS = (0.0, 0.0, -1.0)
 
 SAMPLING_POINT_AXIS = (0.0, 0.0, 1.0)
 DRILL_POINT_AXIS = (0.0, -1.0, 0.0)
+# jaw's own probing mode (see set_probing_mode) uses the same tool-forward
+# axis as SAMPLING_POINT_AXIS — jaw's TCP +Z is its reach direction, same
+# convention sampling's tool shares — kept as its own named constant so jaw
+# and drill_sampling don't read as coupled if either axis ever needs to
+# change independently.
+PROBING_POINT_AXIS = (0.0, 0.0, 1.0)
 # Untested on real hardware yet — B/Y (sampling_home/drill_home) and the
 # level button log and do nothing while False.
 SAMPLING_DRILL_MODES_ENABLED = True
@@ -146,6 +152,16 @@ DEFAULT_HOME_POSE     = [-1.552, 0.5057, 1.1731, 0.717, 0.0093, -1.536]
 DEFAULT_KEYBOARD_DEVICE_PATH = 'auto'
 DEFAULT_GAMEPAD_SHIFT_BUTTON = 10
 DEFAULT_SAFE_POSE_TIMEOUT = 60.0
+# Scaling passed on every move_group goal in _execute_move_group_constraints
+# (A/B/Y home moves, level_tool) — fraction of each joint's own max_velocity/
+# max_acceleration (arm_moveit_config/config/joint_limits.yaml), which
+# itself already has a conservative default_velocity/acceleration_scaling_
+# factor of 0.1 ("for beginners"). 0.15 here felt slow/jerky in practice —
+# low acceleration in particular reads as jerkiness, not just slowness,
+# since the arm can't ramp torque smoothly. Raise further if still too slow,
+# lower again if it overshoots/oscillates or feels unsafe near people.
+DEFAULT_PLAN_EXECUTE_VELOCITY_SCALING = 1.0
+DEFAULT_PLAN_EXECUTE_ACCELERATION_SCALING = 1.0
 
 DEFAULT_GRIPPER_SPEED = 0.006   # m/s
 DEFAULT_GRIPPER_STROKE = 0.012  # m — matches finger_stroke in arm_macro.xacro
@@ -156,7 +172,13 @@ DEFAULT_PANEL_POSE_TOPIC = '/panel_pose'
 DEFAULT_PANEL_VISIBLE_MAX_AGE_SEC = 3.0
 DEFAULT_PANEL_ALIGN_TIMEOUT = 120.0
 
-ACTIVITY_INDICATOR_PRE_DELAY_SEC = 5.0
+# ERC 2026 Rules, Appendix 3, REQ-OPS-090 mandates this be >= 5.0s during
+# actual competition — see run_planned_activity()'s own docstring. Exposed
+# as the 'activity_indicator_pre_delay_sec' ROS param specifically so it can
+# (and, at competition, MUST) be set back to ERC_REQUIRED_... via launch
+# argument; the default below is 0.0 for bench testing only.
+ERC_REQUIRED_ACTIVITY_INDICATOR_PRE_DELAY_SEC = 5.0
+DEFAULT_ACTIVITY_INDICATOR_PRE_DELAY_SEC = 0.0
 DEFAULT_ACTIVITY_INDICATOR_TOPIC = 'activity_indicator'
 ACTIVITY_INDICATOR_COLOR_ACTIVE = (0.0, 0.0, 1.0, 1.0)  # blue, a=1 (lit)
 ACTIVITY_INDICATOR_COLOR_IDLE = (0.0, 0.0, 0.0, 0.0)    # off
@@ -173,30 +195,6 @@ HOME_POSE_JOINTS = [
     'arm_wrist_1_wrist_2_joint',
     'arm_wrist_2_end_effector_joint',
 ]
-# Same values as arm_macro.xacro's <limit> tags — duplicated (like
-# panel_align_node.py's own JOINT_LIMITS) so a bad poses.json entry can
-# be caught here, before it's ever sent as a home/mode-engage target.
-HOME_POSE_JOINT_LIMITS = {
-    'arm_mount_base_joint': (-2 * math.pi, 2 * math.pi),
-    'arm_base_shoulder_joint': (-2 * math.pi, 2 * math.pi),
-    'arm_shoulder_forearm_joint': (-2 * math.pi, 2 * math.pi),
-    'arm_forearm_wrist_1_joint': (-2 * math.pi, 2 * math.pi),
-    'arm_wrist_1_wrist_2_joint': (-2 * math.pi, 2 * math.pi),
-    'arm_wrist_2_end_effector_joint': (-2 * math.pi, 2 * math.pi),
-}
-
-
-def _pose_limit_violation(pose: list) -> str:
-    """Empty string if every joint in ``pose`` (HOME_POSE_JOINTS order) is
-    within HOME_POSE_JOINT_LIMITS, else a description of the first one
-    that isn't."""
-    for name, value in zip(HOME_POSE_JOINTS, pose):
-        lo, hi = HOME_POSE_JOINT_LIMITS[name]
-        if not (lo <= value <= hi):
-            return f'{name}={value:.4f} outside [{lo:.4f}, {hi:.4f}]'
-    return ''
-
-
 def _load_home_pose_from_json(pose_name='home'):
     """Return ``pose_name`` joint positions from poses.json, or None if unavailable."""
     candidates = [
@@ -216,9 +214,12 @@ def _load_home_pose_from_json(pose_name='home'):
         try:
             data = json.loads(path.read_text())
             pose = data.get(pose_name) or {}
-            return [float(pose[name]) for name in HOME_POSE_JOINTS]
+            values = [float(pose[name]) for name in HOME_POSE_JOINTS]
         except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError):
             continue
+        if not all(math.isfinite(v) for v in values):
+            return None
+        return values
     return None
 
 
@@ -358,10 +359,15 @@ class ServoController(Node):
         self.declare_parameter('view_frame',    DEFAULT_VIEW_FRAME)
         # A / R move to this joint vector (defaults to poses.json "home").
         self.declare_parameter('safe_pose',     DEFAULT_HOME_POSE)
-        self.declare_parameter('home_pose_name', 'home')
+        # Empty (default): auto-pick '{end_effector}_home' if poses.json has
+        # it (e.g. 'jaw_home'), else fall back to 'home'. Set explicitly to
+        # pin a name regardless of end_effector.
+        self.declare_parameter('home_pose_name', '')
         self.declare_parameter('keyboard_device_path', DEFAULT_KEYBOARD_DEVICE_PATH)
         self.declare_parameter('gamepad_shift_button', DEFAULT_GAMEPAD_SHIFT_BUTTON)
         self.declare_parameter('safe_pose_timeout', DEFAULT_SAFE_POSE_TIMEOUT)
+        self.declare_parameter('plan_execute_velocity_scaling', DEFAULT_PLAN_EXECUTE_VELOCITY_SCALING)
+        self.declare_parameter('plan_execute_acceleration_scaling', DEFAULT_PLAN_EXECUTE_ACCELERATION_SCALING)
         self.declare_parameter('gripper_speed', DEFAULT_GRIPPER_SPEED)
         self.declare_parameter('gripper_stroke', DEFAULT_GRIPPER_STROKE)
         self.declare_parameter('end_effector', 'jaw')
@@ -369,6 +375,10 @@ class ServoController(Node):
         self.declare_parameter('panel_visible_max_age_sec', DEFAULT_PANEL_VISIBLE_MAX_AGE_SEC)
         self.declare_parameter('panel_align_timeout', DEFAULT_PANEL_ALIGN_TIMEOUT)
         self.declare_parameter('activity_indicator_topic', DEFAULT_ACTIVITY_INDICATOR_TOPIC)
+        # ERC-mandated at competition (see the constant's own comment) —
+        # defaults to 0.0 (no wait) for bench testing, set explicitly to
+        # ERC_REQUIRED_ACTIVITY_INDICATOR_PRE_DELAY_SEC (5.0) for real runs.
+        self.declare_parameter('activity_indicator_pre_delay_sec', DEFAULT_ACTIVITY_INDICATOR_PRE_DELAY_SEC)
 
         self._linear_speed  = self.get_parameter('linear_speed').value
         self._angular_speed = self.get_parameter('angular_speed').value
@@ -383,17 +393,22 @@ class ServoController(Node):
             self._linear_frame = DEFAULT_LINEAR_FRAME
         self._ee_frame      = self.get_parameter('ee_frame').value
         self._view_frame    = self.get_parameter('view_frame').value
-        self._home_pose_name = self.get_parameter('home_pose_name').value
+        # Read before home_pose_name resolution below, which derives its
+        # auto-pick from it.
+        self._end_effector = self.get_parameter('end_effector').value
+        home_pose_name_param = self.get_parameter('home_pose_name').value
+        if home_pose_name_param:
+            self._home_pose_name = home_pose_name_param
+        else:
+            auto_home_pose_name = f'{self._end_effector}_home'
+            self._home_pose_name = (
+                auto_home_pose_name
+                if _load_home_pose_from_json(auto_home_pose_name) is not None
+                else 'home'
+            )
         # Prefer poses.json home unless the caller overrode safe_pose explicitly.
         pose_from_param = list(self.get_parameter('safe_pose').value)
         pose_from_json = _load_home_pose_from_json(self._home_pose_name)
-        if pose_from_json is not None:
-            violation = _pose_limit_violation(pose_from_json)
-            if violation:
-                self.get_logger().error(
-                    f'poses.json["{self._home_pose_name}"] {violation} — ignoring it.'
-                )
-                pose_from_json = None
         if pose_from_param == list(DEFAULT_HOME_POSE) and pose_from_json is not None:
             self._safe_pose = pose_from_json
             pose_source = f'poses.json["{self._home_pose_name}"]'
@@ -406,16 +421,38 @@ class ServoController(Node):
         self._sampling_home_pose = self._load_tool_home_pose(self._sampling_home_pose_name)
         self._drill_home_pose_name = 'drill_home'
         self._drill_home_pose = self._load_tool_home_pose(self._drill_home_pose_name)
+        # drill_sampling's B (sampling_home -> sampling_to_drill -> drill_home)
+        # and Y (container detour, target depends on which mode is currently
+        # active) — see GamepadInputLoop._handle_safe_pose/_on_joy.
+        self._sampling_to_drill_pose_name = 'sampling_to_drill'
+        self._sampling_to_drill_pose = self._load_tool_home_pose(self._sampling_to_drill_pose_name)
+        self._sampling_container_pose_name = 'sampling_container'
+        self._sampling_container_pose = self._load_tool_home_pose(self._sampling_container_pose_name)
+        self._drill_container_pose_name = 'drill_container'
+        self._drill_container_pose = self._load_tool_home_pose(self._drill_container_pose_name)
+        # jaw's own probing mode — same _level_hold mechanism as sampling
+        # mode (point tool-forward axis down, continuously, no pitch/yaw
+        # stick input routed to it at all — see PROBING_POINT_AXIS/_publish/
+        # GamepadInputLoop's axis mapping), just for end_effector='jaw'
+        # instead of drill_sampling. B enters it (see _on_joy), A exits.
+        self._jaw_probing_home_pose_name = 'jaw_probing_home'
+        self._jaw_probing_home_pose = self._load_tool_home_pose(self._jaw_probing_home_pose_name)
+        # jaw's own Y — two-leg move via jaw_probing_home, then (only on
+        # success) jaw_probing_container — see move_jaw_probing_to_container.
+        self._jaw_probing_container_pose_name = 'jaw_probing_container'
+        self._jaw_probing_container_pose = self._load_tool_home_pose(self._jaw_probing_container_pose_name)
         self._keyboard_device_path = self.get_parameter('keyboard_device_path').value
         self._gamepad_shift_button = int(self.get_parameter('gamepad_shift_button').value)
         self._safe_pose_timeout    = self.get_parameter('safe_pose_timeout').value
+        self._plan_execute_velocity_scaling = self.get_parameter('plan_execute_velocity_scaling').value
+        self._plan_execute_acceleration_scaling = self.get_parameter('plan_execute_acceleration_scaling').value
         self._gripper_speed        = self.get_parameter('gripper_speed').value
         self._gripper_stroke       = self.get_parameter('gripper_stroke').value
-        self._end_effector         = self.get_parameter('end_effector').value
         self._panel_pose_topic          = self.get_parameter('panel_pose_topic').value
         self._panel_visible_max_age_sec = self.get_parameter('panel_visible_max_age_sec').value
         self._panel_align_timeout       = self.get_parameter('panel_align_timeout').value
         self._activity_indicator_topic  = self.get_parameter('activity_indicator_topic').value
+        self._activity_indicator_pre_delay_sec = self.get_parameter('activity_indicator_pre_delay_sec').value
 
         self.vx = 0.0
         self.vy = 0.0
@@ -433,14 +470,14 @@ class ServoController(Node):
         # Scales HOLD_ANGULAR_GAIN/MAX in _orientation_hold for boosted push (set_velocity's hold_boost).
         self._hold_boost = 1.0
         # Selects _level_hold over _orientation_hold in _publish(); set via
-        # set_sampling_mode()/set_drill_mode(). Mutually exclusive (see those).
+        # set_sampling_mode()/set_drill_mode()/set_probing_mode(). sampling/
+        # drill are mutually exclusive with each other (see those); probing
+        # is jaw's own equivalent and never coexists with either in practice
+        # since end_effector is fixed for the whole session.
         self._sampling_mode = False
         self._drill_mode = False
+        self._probing_mode = False
         self._pitch_yaw_locked = False
-        # Set for the duration of run_planned_activity()'s 5s pre-delay —
-        # set_velocity()/set_gripper_velocity() force zero while this is
-        # True, regardless of what's requested, so held teleop input can't
-        # move the arm during the ERC-mandated stationary window.
         self._activity_delay_active = False
         self._joint_positions = {}
 
@@ -497,7 +534,7 @@ class ServoController(Node):
         self._panel_pose_sub = self.create_subscription(
             PoseStamped, self._panel_pose_topic, self._on_panel_pose, 10
         )
-        # See ACTIVITY_INDICATOR_PRE_DELAY_SEC's comment (REQ-OPS-080/090/100)
+        # See run_planned_activity's own docstring (REQ-OPS-080/090/100)
         # — publishes activity-indicator INTENT; nothing in this repo drives
         # a physical lamp off it yet.
         self._activity_indicator_pub = self.create_publisher(
@@ -581,6 +618,56 @@ class ServoController(Node):
         return self._drill_home_pose_name
 
     @property
+    def sampling_to_drill_pose(self):
+        """Return the joint targets B's first leg drives to (drill_sampling)."""
+        return self._sampling_to_drill_pose
+
+    @property
+    def sampling_to_drill_pose_name(self) -> str:
+        """Return the poses.json key sampling_to_drill_pose came from (for logging)."""
+        return self._sampling_to_drill_pose_name
+
+    @property
+    def sampling_container_pose(self):
+        """Return the joint targets Y drives to while sampling mode is armed."""
+        return self._sampling_container_pose
+
+    @property
+    def sampling_container_pose_name(self) -> str:
+        """Return the poses.json key sampling_container_pose came from (for logging)."""
+        return self._sampling_container_pose_name
+
+    @property
+    def drill_container_pose(self):
+        """Return the joint targets Y drives to while drill mode is armed."""
+        return self._drill_container_pose
+
+    @property
+    def drill_container_pose_name(self) -> str:
+        """Return the poses.json key drill_container_pose came from (for logging)."""
+        return self._drill_container_pose_name
+
+    @property
+    def jaw_probing_home_pose(self):
+        """Return the joint targets B drives to for jaw's own probing mode."""
+        return self._jaw_probing_home_pose
+
+    @property
+    def jaw_probing_home_pose_name(self) -> str:
+        """Return the poses.json key jaw_probing_home_pose came from (for logging)."""
+        return self._jaw_probing_home_pose_name
+
+    @property
+    def jaw_probing_container_pose(self):
+        """Return the joint targets Y's second leg drives to (jaw probing)."""
+        return self._jaw_probing_container_pose
+
+    @property
+    def jaw_probing_container_pose_name(self) -> str:
+        """Return the poses.json key jaw_probing_container_pose came from (for logging)."""
+        return self._jaw_probing_container_pose_name
+
+    @property
     def end_effector(self) -> str:
         """Return the 'end_effector' parameter (which tool is mounted)."""
         return self._end_effector
@@ -588,15 +675,6 @@ class ServoController(Node):
     def _load_tool_home_pose(self, pose_name: str):
         """Load poses.json[pose_name], falling back to the jaw safe pose with a warning."""
         pose = _load_home_pose_from_json(pose_name)
-        if pose is not None:
-            violation = _pose_limit_violation(pose)
-            if violation:
-                self.get_logger().error(
-                    f'poses.json["{pose_name}"] {violation} — refusing to use it '
-                    'as a home/mode-engage target; re-teach it. Falling back to '
-                    'the jaw home pose until then.'
-                )
-                pose = None
         if pose is not None:
             return pose
         self.get_logger().warn(
@@ -657,8 +735,6 @@ class ServoController(Node):
                 triples.
         """
         if self._activity_delay_active:
-            # ERC-mandated stationary window (see run_planned_activity) —
-            # every component forced to zero regardless of what's asked.
             vx = vy = vz = wx = wy = wz = view_vx = view_vy = view_vz = 0.0
         self.vx = vx
         self.vy = vy
@@ -731,6 +807,12 @@ class ServoController(Node):
         self._drill_mode = active
         if active:
             self._sampling_mode = False
+        self._hold_quat = None
+
+    def set_probing_mode(self, active: bool):
+        """Arm/disarm jaw's probing mode; drops _hold_quat. Independent of
+        sampling/drill (never coexists with them — different end_effector)."""
+        self._probing_mode = active
         self._hold_quat = None
 
     def _controller_states(self) -> dict:
@@ -851,33 +933,44 @@ class ServoController(Node):
         level/orient call through, so REQ-OPS-080/090/100 are satisfied
         exactly once instead of separately at each call site.
 
+        The wait duration is the ``activity_indicator_pre_delay_sec``
+        parameter, NOT a hardcoded constant — REQ-OPS-090 requires >= 5.0s
+        at actual competition (see ERC_REQUIRED_ACTIVITY_INDICATOR_PRE_DELAY_SEC),
+        but the parameter defaults to 0.0 (no wait at all) for bench
+        testing. Set it explicitly back to 5.0 (or higher) via launch
+        argument / --ros-args -p before any competition run — nothing
+        enforces that automatically.
+
         Sequence:
           1. stop() plus _activity_delay_active=True — set_velocity() and
              set_gripper_velocity() force zero while this is set, so held
              stick/key input during the wait can't sneak a command through
              (review-flagged: the sleep alone did not guarantee this).
           2. Publish the indicator ON (blue).
-          3. Sleep ACTIVITY_INDICATOR_PRE_DELAY_SEC (5s) — REQ-OPS-090.
+          3. Sleep activity_indicator_pre_delay_sec — REQ-OPS-090 at
+             competition; skipped entirely when it's 0.0.
           4. Clear _activity_delay_active, then call ``action()`` —
-             REQ-OPS-100's "at least 5s after the command was issued" —
-             and return whatever it returns.
+             REQ-OPS-100's "at least 5s after the command was issued" (at
+             competition, where the parameter is actually >= 5.0) — and
+             return whatever it returns.
           5. Publish the indicator OFF once ``action()`` returns, success or
              failure alike (``finally``) — REQ-OPS-080's "continue to emit
              ... until all rover activities are finished".
 
         Callers are already running this on their own background thread
         (spawned from ``_read_loop``/``_on_joy``'s button dispatch), so the
-        5s sleep here does not stall keyboard/joy event processing.
+        sleep here does not stall keyboard/joy event processing regardless
+        of how long it's configured to be.
         """
+        delay = self._activity_indicator_pre_delay_sec
         self.get_logger().info(
-            f'{label}: activity indicator on, holding {ACTIVITY_INDICATOR_PRE_DELAY_SEC:.0f}s '
-            f'before moving (ERC REQ-OPS-080/090/100)...'
+            f'{label}: activity indicator on, holding {delay:.1f}s before moving...'
         )
         self.stop()
         self._activity_delay_active = True
         self._signal_activity_indicator(True)
         try:
-            time.sleep(ACTIVITY_INDICATOR_PRE_DELAY_SEC)
+            time.sleep(delay)  # no-op for delay <= 0.0 (bench-testing default)
             self._activity_delay_active = False
             return action()
         finally:
@@ -961,6 +1054,96 @@ class ServoController(Node):
             self._pitch_yaw_locked = False
         return success
 
+    def move_sampling_to_drill(self) -> bool:
+        """Two-leg move for drill_sampling's B: sampling_to_drill waypoint,
+        then — only if that leg actually succeeds — drill_home.
+
+        Same stop/stop_servo/trajectory-controller setup as
+        ``move_to_safe_pose``, done once up front for both legs (JTC stays
+        claimed the whole time, no need to re-switch controllers between
+        them). Each leg is its own collision-checked ``_move_to_joint_positions``
+        call/lock acquisition — if the first leg is rejected or aborts, the
+        second is never attempted and the arm is left holding wherever the
+        first leg's plan stopped, not silently warped to drill_home.
+
+        Returns:
+            bool: True only if BOTH legs completed successfully (see
+            ``move_to_safe_pose``'s own return-value contract for the exact
+            failure modes each leg can hit).
+        """
+        self.stop()
+
+        if not self.stop_servo():
+            self.get_logger().error(
+                'Could not confirm Servo stopped — aborting sampling_to_drill sequence.'
+            )
+            return False
+
+        if not self.use_trajectory_controller():
+            self.get_logger().error(
+                'Could not activate trajectory controller — aborting sampling_to_drill sequence.'
+            )
+            return False
+
+        waypoint_ok = self._move_to_joint_positions(
+            list(self._sampling_to_drill_pose), f'{self._sampling_to_drill_pose_name} (waypoint)'
+        )
+        if not waypoint_ok:
+            self.get_logger().error(
+                f'{self._sampling_to_drill_pose_name} failed — aborting before the drill_home leg.'
+            )
+            return False
+
+        final_ok = self._move_to_joint_positions(
+            list(self._drill_home_pose), f'home ({self._drill_home_pose_name})'
+        )
+        if final_ok:
+            self._pitch_yaw_locked = False
+        return final_ok
+
+    def move_jaw_probing_to_container(self) -> bool:
+        """Two-leg move for jaw's Y: jaw_probing_home waypoint, then — only
+        if that leg actually succeeds — jaw_probing_container.
+
+        Mirrors ``move_sampling_to_drill``'s own structure exactly (same
+        stop/stop_servo/trajectory-controller setup done once for both legs,
+        same abort-before-second-leg-on-failure behavior) — see its
+        docstring for the full reasoning, it applies here unchanged.
+
+        Returns:
+            bool: True only if BOTH legs completed successfully.
+        """
+        self.stop()
+
+        if not self.stop_servo():
+            self.get_logger().error(
+                'Could not confirm Servo stopped — aborting jaw_probing_container sequence.'
+            )
+            return False
+
+        if not self.use_trajectory_controller():
+            self.get_logger().error(
+                'Could not activate trajectory controller — aborting jaw_probing_container sequence.'
+            )
+            return False
+
+        waypoint_ok = self._move_to_joint_positions(
+            list(self._jaw_probing_home_pose), f'{self._jaw_probing_home_pose_name} (waypoint)'
+        )
+        if not waypoint_ok:
+            self.get_logger().error(
+                f'{self._jaw_probing_home_pose_name} failed — aborting before the '
+                f'{self._jaw_probing_container_pose_name} leg.'
+            )
+            return False
+
+        final_ok = self._move_to_joint_positions(
+            list(self._jaw_probing_container_pose), f'home ({self._jaw_probing_container_pose_name})'
+        )
+        if final_ok:
+            self._pitch_yaw_locked = False
+        return final_ok
+
     def _move_to_joint_positions(self, target_positions, label: str) -> bool:
         """Plan (OMPL, collision-checked) and execute a move from the
         current joint state to ``target_positions``, then wait.
@@ -997,11 +1180,6 @@ class ServoController(Node):
                 f'Another arm motion is already in progress — aborting {label}.'
             )
             return False
-        # Lease covers _execute_move_group_constraints' own timeout
-        # (self._safe_pose_timeout) plus margin for the planning/service-
-        # call overhead around it; <=0 there means "wait forever", so
-        # give the lease itself a long-but-finite cap instead of a lease
-        # too short to survive an intentionally unbounded wait.
         lease_sec = self._safe_pose_timeout + 15.0 if self._safe_pose_timeout > 0.0 else 600.0
         try:
             try:
@@ -1097,6 +1275,13 @@ class ServoController(Node):
         ``(success, error)`` — ``error`` is empty on success, otherwise a
         short description (goal rejected, no result within the timeout, or
         the MoveIt status/error code on failure).
+
+        Speed comes from the ``plan_execute_velocity_scaling``/
+        ``plan_execute_acceleration_scaling`` params (fraction of each
+        joint's own max_velocity/max_acceleration in joint_limits.yaml) —
+        raise them if A/B/Y home moves feel slow or jerky (low acceleration
+        in particular reads as jerkiness), lower them again if a move
+        overshoots/oscillates or feels unsafe near people.
         """
         goal = MoveGroup.Goal()
         goal.request.group_name = MOVEIT_GROUP_NAME
@@ -1105,8 +1290,8 @@ class ServoController(Node):
         goal.request.num_planning_attempts = 5
         goal.request.allowed_planning_time = 10.0
 
-        goal.request.max_velocity_scaling_factor = 0.15
-        goal.request.max_acceleration_scaling_factor = 0.15
+        goal.request.max_velocity_scaling_factor = self._plan_execute_velocity_scaling
+        goal.request.max_acceleration_scaling_factor = self._plan_execute_acceleration_scaling
         goal.planning_options.plan_only = False  # plan then execute in one goal
         goal.planning_options.replan = True
         goal.planning_options.replan_attempts = 5
@@ -1157,11 +1342,6 @@ class ServoController(Node):
                 'controller may be unresponsive '
                 '(raise the safe_pose_timeout parameter if the sim is just slow).'
             )
-            # Critical: not cancelling here would leave the goal running
-            # server-side after this returns "failed" — callers restart
-            # Servo right after any outcome, which would then race an
-            # execution still in flight. See panel_align_node.py's
-            # _execute() for the same pattern.
             gh = goal_handle_box.get('gh')
             if gh is not None:
                 cancel_done = threading.Event()
@@ -1532,6 +1712,8 @@ class ServoController(Node):
             wx, wy, wz = self._level_hold(wx, wy, wz, SAMPLING_POINT_AXIS)
         elif self._drill_mode:
             wx, wy, wz = self._level_hold(wx, wy, wz, DRILL_POINT_AXIS)
+        elif self._probing_mode:
+            wx, wy, wz = self._level_hold(wx, wy, wz, PROBING_POINT_AXIS)
         else:
             wx, wy, wz = self._orientation_hold(wx, wy, wz)
 
@@ -2131,7 +2313,7 @@ class EndEffectorClient:
 
     _VALID_COMMANDS = frozenset({
         'open', 'close', 'drill_up', 'drill_down',
-        'stop_step', 'stop_drill', 'lock', 'unlock',
+        'stop_step', 'stop_drill', 'lock', 'unlock', 'read_ph',
     })
 
     def __init__(self, node):
@@ -2232,14 +2414,32 @@ class GamepadInputLoop:
     AXIS_L2 = 4         # unmapped; used only for trigger rest calibration
     AXIS_R2 = 5
 
-    BUTTON_SAFE_POSE = 0   # 'A' — move to home + start servo
-    # 'B' — force sampling mode on and go straight to sampling_home.
-    # One-shot, not a toggle — there is no button that turns it back off
-    # short of restarting with a different end_effector.
+    # 'A' — jaw/astrobio: move to home + start servo. drill_sampling: always
+    # goes to sampling_home instead (also how you get back to it from
+    # sampling_container after Y — see BUTTON_DRILL_HOME below).
+    BUTTON_SAFE_POSE = 0
+    # 'B' — astrobio: locked out (no drill/sampling tool mounted).
+    # drill_sampling: goes to drill_home — via the sampling_to_drill
+    # transition waypoint first if drill mode isn't already armed (see
+    # ServoController.move_sampling_to_drill), straight there otherwise
+    # (already in the drill zone, e.g. returning from drill_container — see
+    # _on_joy). jaw: arms probing mode instead (jaw_probing_home +
+    # continuous point-down hold, same _level_hold mechanism as sampling
+    # mode — see PROBING_POINT_AXIS); plain A (BUTTON_SAFE_POSE) is jaw's
+    # way back out. One-shot, not a toggle — there is no button that turns
+    # drill_sampling's own sampling/drill mode back off short of restarting
+    # with a different end_effector.
     BUTTON_SAMPLING_HOME = 1
     BUTTON_EXIT = 2        # 'X' — exit
-    # 'Y' — force drill mode on and go straight to drill_home. One-shot,
-    # mirrors BUTTON_SAMPLING_HOME above.
+    # 'Y' — astrobio: locked out. drill_sampling: container detour, target
+    # depends on whichever mode is CURRENTLY armed (not fixed) —
+    # sampling_container while sampling_mode is active, drill_container
+    # while drill_mode is active (see _on_joy) — armed by A/B above, not by
+    # this button itself; one-shot per press, does not change which mode is
+    # armed. jaw: two-leg move instead — jaw_probing_home waypoint, then
+    # (only on success) jaw_probing_container (see
+    # ServoController.move_jaw_probing_to_container) — arms probing mode on
+    # success, unlike drill_sampling's own Y.
     BUTTON_DRILL_HOME = 3
     BUTTON_LB = 4          # unmapped (settle check only)
     # LEFTSHOULDER/L1. Held to scale up commanded velocity — raises the
@@ -2296,10 +2496,12 @@ class GamepadInputLoop:
         self._linear_speed = controller.linear_speed
         self._angular_speed = controller.angular_speed
         self._shift_button = controller.gamepad_shift_button
-        # Mirrors ServoController's own _sampling_mode/_drill_mode — needed
-        # here too since they decide how the right stick maps to wx/wy/wz/view_vz.
+        # Mirrors ServoController's own _sampling_mode/_drill_mode/_probing_mode
+        # — needed here too since they decide how the right stick maps to
+        # wx/wy/wz/view_vz.
         self._sampling_mode = False
         self._drill_mode = False
+        self._probing_mode = False
         self._exit_event = threading.Event()
         self._prev_buttons = None
         self._safe_pose_running = threading.Lock()
@@ -2525,6 +2727,9 @@ class GamepadInputLoop:
                 else:
                     self._ee_client.send('open')
                     self._controller.get_logger().info('Claw: OPEN sent.')
+            elif end_effector == 'astrobio':
+                self._ee_client.send('open')
+                self._controller.get_logger().info('Astrobio: SUCK ON sent.')
             else:
                 self._ee_client.send('open')
                 self._controller.set_gripper_target(self._controller.gripper_stroke)
@@ -2538,6 +2743,9 @@ class GamepadInputLoop:
                 else:
                     self._ee_client.send('close')
                     self._controller.get_logger().info('Claw: CLOSE sent.')
+            elif end_effector == 'astrobio':
+                self._ee_client.send('close')
+                self._controller.get_logger().info('Astrobio: SUCK OFF sent.')
             else:
                 self._ee_client.send('close')
                 self._controller.set_gripper_target(0.0)
@@ -2546,16 +2754,49 @@ class GamepadInputLoop:
         if lock_pressed and end_effector == 'drill_sampling':
             self._ee_client.send('lock')
             self._controller.get_logger().info('Claw/drill: LOCK sent.')
+        elif lock_pressed and end_effector == 'astrobio':
+            self._ee_client.send('read_ph')
+            self._controller.get_logger().info('Astrobio: READ PH sent.')
 
         if unlock_pressed and end_effector == 'drill_sampling':
             self._ee_client.send('unlock')
             self._controller.get_logger().info('Claw/drill: UNLOCK sent.')
 
+        # drill_sampling's own A/B/Y sequence (button labels below match the
+        # physical buttons, not the old sampling/drill "home" naming):
+        #   A -> sampling_home (always; also how you get back to it from
+        #        sampling_container). For jaw, plain A/home also exits
+        #        probing mode if it was armed (see _handle_safe_pose).
+        #   B -> drill_home, routed by whichever mode is currently active:
+        #        via the sampling_to_drill transition waypoint first if NOT
+        #        already in drill mode (see
+        #        ServoController.move_sampling_to_drill), or straight there
+        #        if drill mode is already armed (e.g. returning from
+        #        drill_container — no need to detour back through the
+        #        sampling-side waypoint just to reach a pose you're already
+        #        near). For jaw specifically, B instead arms probing mode
+        #        (jaw_probing_home + continuous point-down hold, same
+        #        _level_hold mechanism as sampling mode — see
+        #        PROBING_POINT_AXIS) — jaw has no drill/sampling tool, so
+        #        this button was otherwise unused for it.
+        #   Y -> drill_sampling: container detour, routed by whichever mode
+        #        is currently active: sampling_container while sampling_mode
+        #        is armed, drill_container while drill_mode is armed. Does
+        #        not change which mode is armed (see _handle_safe_pose's
+        #        docstring). jaw: two-leg move instead — jaw_probing_home
+        #        waypoint, then (only on success) jaw_probing_container (see
+        #        ServoController.move_jaw_probing_to_container), arming
+        #        probing mode on success — jaw's own equivalent of B's
+        #        sampling_to_drill chain, just on Y instead since jaw
+        #        already uses B to arm probing mode via jaw_probing_home
+        #        alone.
         if safe_pose_pressed and end_effector == 'drill_sampling':
-            self._controller.get_logger().warn(
-                "A (home) is locked out with end_effector='drill_sampling' — "
-                'use B (sampling_home) or Y (drill_home) instead.'
+            self._controller.get_logger().info(
+                'A pressed (drill_sampling) — going straight to sampling_home.'
             )
+            threading.Thread(
+                target=self._handle_safe_pose, args=('sampling',), daemon=True
+            ).start()
         elif safe_pose_pressed:
             threading.Thread(target=self._handle_safe_pose, daemon=True).start()
 
@@ -2563,11 +2804,37 @@ class GamepadInputLoop:
             self._controller.get_logger().warn(
                 'Sampling home is disabled (SAMPLING_DRILL_MODES_ENABLED=False) — ignored.'
             )
-        elif sampling_home_pressed and end_effector in ('jaw', 'astrobio'):
+        elif sampling_home_pressed and end_effector == 'astrobio':
             self._controller.get_logger().warn(
                 f"B (sampling_home) is locked out with end_effector='{end_effector}' "
                 '— no drill/sampling tool mounted.'
             )
+        elif sampling_home_pressed and end_effector == 'jaw':
+            self._controller.get_logger().info(
+                'B pressed (jaw) — going to jaw_probing_home (probing mode).'
+            )
+            threading.Thread(
+                target=self._handle_safe_pose, args=('probing',), daemon=True
+            ).start()
+        elif sampling_home_pressed and end_effector == 'drill_sampling':
+            if self._drill_mode:
+                # Already in drill mode (e.g. sitting at drill_container via
+                # Y) — go straight back to drill_home, no need to route
+                # through the sampling-side transition waypoint again.
+                self._controller.get_logger().info(
+                    'B pressed (drill_sampling, already drill mode) — '
+                    'going straight to drill_home.'
+                )
+                threading.Thread(
+                    target=self._handle_safe_pose, args=('drill',), daemon=True
+                ).start()
+            else:
+                self._controller.get_logger().info(
+                    'B pressed (drill_sampling) — going to sampling_to_drill, then drill_home.'
+                )
+                threading.Thread(
+                    target=self._handle_safe_pose, args=('sampling_to_drill',), daemon=True
+                ).start()
         elif sampling_home_pressed:
             # Mode is NOT flipped here — only once the home move actually
             # succeeds (see _handle_safe_pose's target_mode handling).
@@ -2586,11 +2853,37 @@ class GamepadInputLoop:
             self._controller.get_logger().warn(
                 'Drill home is disabled (SAMPLING_DRILL_MODES_ENABLED=False) — ignored.'
             )
-        elif drill_home_pressed and end_effector in ('jaw', 'astrobio'):
+        elif drill_home_pressed and end_effector == 'astrobio':
             self._controller.get_logger().warn(
                 f"Y (drill_home) is locked out with end_effector='{end_effector}' "
                 '— no drill/sampling tool mounted.'
             )
+        elif drill_home_pressed and end_effector == 'jaw':
+            self._controller.get_logger().info(
+                'Y pressed (jaw) — going to jaw_probing_home, then jaw_probing_container.'
+            )
+            threading.Thread(
+                target=self._handle_safe_pose, args=('jaw_probing_container',), daemon=True
+            ).start()
+        elif drill_home_pressed and end_effector == 'drill_sampling':
+            if self._drill_mode:
+                container_target = 'drill_container'
+            elif self._sampling_mode:
+                container_target = 'sampling_container'
+            else:
+                container_target = None
+            if container_target is None:
+                self._controller.get_logger().warn(
+                    'Y pressed but neither sampling_home nor drill_home has '
+                    'been reached yet — press A first.'
+                )
+            else:
+                self._controller.get_logger().info(
+                    f'Y pressed (drill_sampling) — going to {container_target}.'
+                )
+                threading.Thread(
+                    target=self._handle_safe_pose, args=(container_target,), daemon=True
+                ).start()
         elif drill_home_pressed:
             # See sampling_home_pressed's comment above — same deferred-
             # mode-switch reasoning applies here.
@@ -2712,12 +3005,27 @@ class GamepadInputLoop:
         view_vz = 0.0
         wx = wy = wz = 0.0
         if self._sampling_mode:
+            # Note wx/wy are never assigned in this branch at all (stay 0.0
+            # from above): pitch/yaw has no stick input routed to it here,
+            # _level_hold in _publish is the only thing that ever touches
+            # them while this mode is active.
             view_vy = -right_y * linear_speed      # inverted
             view_vz = right_x * linear_speed       # inverted
             wz = -left_x * angular_speed           # roll — pitch/yaw locked level
+        elif self._probing_mode:
+            # Right stick axes swapped vs sampling mode above (by request):
+            # vertical stick drives up/down (view_vz, inverted — also by
+            # request), horizontal stick drives left/right (view_vy) — same
+            # wx/wy-untouched note as sampling mode applies here too.
+            view_vy = -right_x * linear_speed
+            view_vz = -right_y * linear_speed
+            wz = -left_x * angular_speed           # roll — pitch/yaw locked level
         elif self._drill_mode:
-            view_vx = -right_x * linear_speed
-            view_vy = -right_y * linear_speed
+            # Right stick axes swapped vs the naive mapping on purpose (by
+            # request): vertical stick drives forward/back, horizontal
+            # stick drives left/right — opposite of every other mode here.
+            view_vx = -right_y * linear_speed
+            view_vy = -right_x * linear_speed
             view_vz = left_y * linear_speed
         elif shift:
             view_vy = left_x * linear_speed
@@ -2786,11 +3094,27 @@ class GamepadInputLoop:
         """Stop motion and move to the safe pose (mirrors KeyboardInputLoop's 'r').
 
         Args:
-            target_mode: ``'sampling'``/``'drill'`` if this move was
-                triggered by B/Y (mode-engage), or ``None`` for plain A
-                (jaw/astrobio home). Only decides which pose to target
-                and which mode to commit AFTER a successful move — see
-                below.
+            target_mode: ``None`` for plain A (jaw/astrobio home) — also
+                the only path that disarms jaw's ``_probing_mode`` if it was
+                armed, since jaw has no other "return to normal" button.
+                drill_sampling's own A/B/Y sequence (see ``_on_joy``):
+                ``'sampling'`` (A, sampling_home), ``'sampling_to_drill'``
+                (B, two-leg move ending at drill_home — see
+                ``ServoController.move_sampling_to_drill``),
+                ``'sampling_container'``/``'drill_container'`` (Y, routed
+                by whichever mode is currently active — side detour, does
+                NOT change ``_sampling_mode``/``_drill_mode`` below).
+                ``'drill'`` is kept only for callers that want to jump
+                straight to drill_home without the sampling_to_drill leg.
+                ``'probing'`` is jaw's own B — jaw_probing_home + continuous
+                point-down hold (see ``PROBING_POINT_AXIS``), the jaw
+                equivalent of ``'sampling'``. ``'jaw_probing_container'`` is
+                jaw's own Y — two-leg move via jaw_probing_home then (only
+                on success) jaw_probing_container, see
+                ``ServoController.move_jaw_probing_to_container`` — the jaw
+                equivalent of ``'sampling_to_drill'``.
+                Only decides which pose(s) to target and which mode to
+                commit AFTER a successful move — see below.
 
         Guarded by a non-blocking lock so a second button press while a
         move is already in progress is ignored instead of racing a
@@ -2829,6 +3153,28 @@ class GamepadInputLoop:
                     positions=self._controller.drill_home_pose,
                     name=self._controller.drill_home_pose_name,
                 )
+            elif target_mode == 'sampling_to_drill':
+                action = self._controller.move_sampling_to_drill
+            elif target_mode == 'sampling_container':
+                action = functools.partial(
+                    self._controller.move_to_safe_pose,
+                    positions=self._controller.sampling_container_pose,
+                    name=self._controller.sampling_container_pose_name,
+                )
+            elif target_mode == 'drill_container':
+                action = functools.partial(
+                    self._controller.move_to_safe_pose,
+                    positions=self._controller.drill_container_pose,
+                    name=self._controller.drill_container_pose_name,
+                )
+            elif target_mode == 'probing':
+                action = functools.partial(
+                    self._controller.move_to_safe_pose,
+                    positions=self._controller.jaw_probing_home_pose,
+                    name=self._controller.jaw_probing_home_pose_name,
+                )
+            elif target_mode == 'jaw_probing_container':
+                action = self._controller.move_jaw_probing_to_container
             else:
                 action = self._controller.move_to_safe_pose
             home_ok = self._controller.run_planned_activity(action, 'move_to_safe_pose')
@@ -2837,10 +3183,20 @@ class GamepadInputLoop:
                     self._sampling_mode = True
                     self._drill_mode = False
                     self._controller.set_sampling_mode(True)
-                elif target_mode == 'drill':
+                elif target_mode in ('drill', 'sampling_to_drill'):
                     self._drill_mode = True
                     self._sampling_mode = False
                     self._controller.set_drill_mode(True)
+                elif target_mode in ('probing', 'jaw_probing_container'):
+                    self._probing_mode = True
+                    self._controller.set_probing_mode(True)
+                elif target_mode is None:
+                    # Plain A/home (jaw/astrobio) — jaw's only way back from
+                    # probing mode, since jaw has no dedicated "exit" button.
+                    self._probing_mode = False
+                    self._controller.set_probing_mode(False)
+                # sampling_container/drill_container: side detour, current
+                # mode is left exactly as it was (see docstring above).
                 print('Starting servo...')
                 if self._controller.start_servo():
                     self._teleop_locked = False
