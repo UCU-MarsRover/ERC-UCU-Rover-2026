@@ -1,36 +1,51 @@
-# ERC-UCU
-Mars Rover project by the UCU Space Robotics Team for ERC competitions
+<h1 align="center">Indomitus — Mars Rover Core</h1>
 
-[![main](https://img.shields.io/github/v/release/UCUSpaceRobotics/indomitus-rover-core?label=main&color=green)](https://github.com/UCUSpaceRobotics/indomitus-rover-core/releases/latest)
-[![develop](https://img.shields.io/github/v/release/UCUSpaceRobotics/indomitus-rover-core?include_prereleases&label=develop)](https://github.com/UCUSpaceRobotics/indomitus-rover-core/releases)
+<p align="center">
+  Everything that runs on <b>Indomitus</b> &mdash; the Mars rover built by the
+  <a href="https://indomitus-ucu.vercel.app/">UCU Space Robotics</a> team at the
+  Ukrainian Catholic University for the
+  <a href="https://roverchallenge.eu/">European Rover Challenge</a>.
+</p>
+
+<p align="center">
+  <a href="https://docs.ros.org/en/humble/"><img alt="ROS 2 Humble" src="https://img.shields.io/badge/ROS%202-Humble-22314E?logo=ros&logoColor=white"></a>
+  <a href="https://releases.ubuntu.com/22.04/"><img alt="Ubuntu 22.04" src="https://img.shields.io/badge/Ubuntu-22.04-E95420?logo=ubuntu&logoColor=white"></a>
+  <img alt="Platform" src="https://img.shields.io/badge/platform-amd64%20%7C%20arm64-informational">
+</p>
+
+<p align="center">
+  <a href="https://github.com/UCUSpaceRobotics/indomitus-rover-core/actions/workflows/publish_image.yaml?query=branch%3Amain"><img alt="main build" src="https://img.shields.io/github/actions/workflow/status/UCUSpaceRobotics/indomitus-rover-core/publish_image.yaml?branch=main&label=main%20build&logo=github"></a>
+  <a href="https://github.com/UCUSpaceRobotics/indomitus-rover-core/actions/workflows/publish_image.yaml?query=branch%3Adevelop"><img alt="develop build" src="https://img.shields.io/github/actions/workflow/status/UCUSpaceRobotics/indomitus-rover-core/publish_image.yaml?branch=develop&label=develop%20build&logo=github"></a>
+  <a href="https://github.com/UCUSpaceRobotics/indomitus-rover-core/releases/latest"><img alt="main release" src="https://img.shields.io/github/v/release/UCUSpaceRobotics/indomitus-rover-core?label=main&color=green"></a>
+  <a href="https://github.com/UCUSpaceRobotics/indomitus-rover-core/releases"><img alt="develop release" src="https://img.shields.io/github/v/release/UCUSpaceRobotics/indomitus-rover-core?include_prereleases&label=develop"></a>
+</p>
 
 ---
 
 
 ## Table of Contents
 
-- [ERC-UCU](#erc-ucu)
-  - [Table of Contents](#table-of-contents)
-  - [Getting Started](#getting-started)
-  - [Documentation](#documentation)
-  - [Rover Usage](#rover-usage)
-    - [Starting the Jetson-Controlled Rover](#starting-the-jetson-controlled-rover)
-    - [Starting the Laptop-Controlled Rover](#starting-the-laptop-controlled-rover)
-    - [Turning Off the Rover](#turning-off-the-rover)
-    - [Current System Credentials and Network Info](#current-system-credentials-and-network-info)
-    - [SSH Access to the Jetson](#ssh-access-to-the-jetson)
-      - [SSH via Hotspot](#ssh-via-hotspot)
-      - [SSH via Ethernet](#ssh-via-ethernet)
-  - [ROS\_DOMAIN\_ID](#ros_domain_id)
-    - [Managing ROS\_DOMAIN\_ID](#managing-ros_domain_id)
-  - [Docker](#docker)
-    - [Getting the Docker Image](#getting-the-docker-image)
-    - [Start the Container and Build the Workspace](#start-the-container-and-build-the-workspace)
-    - [Image Tags](#image-tags)
-  - [Scripts](#scripts)
-    - [Deployment Script](#deployment-script)
-    - [Script to Enter Containers](#script-to-enter-containers)
-  - [Testing](#testing)
+- [Getting Started](#getting-started)
+- [Documentation](#documentation)
+- [Rover Usage](#rover-usage)
+  - [Starting the Jetson-Controlled Rover](#starting-the-jetson-controlled-rover)
+  - [Starting the Laptop-Controlled Rover](#starting-the-laptop-controlled-rover)
+  - [Turning Off the Rover](#turning-off-the-rover)
+  - [Current System Credentials and Network Info](#current-system-credentials-and-network-info)
+  - [SSH Access to the Jetson](#ssh-access-to-the-jetson)
+    - [SSH via Hotspot](#ssh-via-hotspot)
+    - [SSH via Ethernet](#ssh-via-ethernet)
+- [ROS\_DOMAIN\_ID](#ros_domain_id)
+  - [Managing ROS\_DOMAIN\_ID](#managing-ros_domain_id)
+- [Docker](#docker)
+  - [Getting the Docker Image](#getting-the-docker-image)
+  - [Start the Container and Build the Workspace](#start-the-container-and-build-the-workspace)
+  - [Image Tags](#image-tags)
+  - [Aliases](#aliases)
+- [Scripts](#scripts)
+  - [Deployment Script](#deployment-script)
+  - [Script to Enter Containers](#script-to-enter-containers)
+- [Testing](#testing)
 
 
 ---

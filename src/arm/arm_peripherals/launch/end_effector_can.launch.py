@@ -17,7 +17,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'load_poll_period_sec',
-            default_value='0.1',
+            default_value='0.5',
             description='jaw only: how often to request load-sensor telemetry.',
         ),
         Node(

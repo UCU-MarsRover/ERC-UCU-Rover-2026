@@ -4,12 +4,15 @@ Same split as rover_peripherals/rover_lighting_node.py.
 
 Topics:
   Sub  end_effector_controller/command  (std_msgs/String): open, close,
-       drill_up, drill_down, stop_step, stop_drill, lock, unlock
+       drill_up, drill_down, stop_step, stop_drill, lock, unlock, read_ph
   Pub  end_effector_controller/state    (indomitus_interfaces/EndEffectorState)
   Pub  /to_can_bus, Sub /from_can_bus   (can_msgs/Frame)
 
-CAN IDs (docs/hardware/can_bus.md): jaw 0x1A/0x1B, astrobio 0x1C/0x1D
-(no firmware), drill_sampling 0x1E/0x1F.
+CAN IDs (docs/hardware/can_bus.md): jaw 0x1A/0x1B, astrobio 0x1C/0x1D,
+drill_sampling 0x1E/0x1F. astrobio command bytes (open=suck on, close=suck
+off, read_ph=request pH reading) confirmed live via cansend — see
+_on_astrobio_command. Its 0x1D reply's byte layout is NOT confirmed yet, so
+_on_can_frame only logs it raw for now rather than guessing a decode.
 """
 
 import struct
@@ -38,9 +41,15 @@ DRILL_CMD_STOP_DRILL = 6
 DRILL_CMD_LOCK = 7
 DRILL_CMD_UNLOCK = 8
 
+ASTROBIO_CMD_ID = 0x1C
+ASTROBIO_REPLY_ID = 0x1D
+ASTROBIO_CMD_SUCK_ON = 1
+ASTROBIO_CMD_SUCK_OFF = 2
+ASTROBIO_CMD_READ_PH = 4
+
 _VALID_COMMANDS = frozenset({
     'open', 'close', 'drill_up', 'drill_down',
-    'stop_step', 'stop_drill', 'lock', 'unlock',
+    'stop_step', 'stop_drill', 'lock', 'unlock', 'read_ph',
 })
 
 _STALE_REPLY_POLL_PERIODS = 3.0  # poll periods before a jaw reply is 'stale'
@@ -67,11 +76,6 @@ class EndEffectorCanNode(Node):
         self._last_reply_time = None
         self._warned_bad_values = set()
 
-        if self._end_effector == 'astrobio':
-            self.get_logger().warn(
-                "end_effector='astrobio' has no firmware — commands are no-ops."
-            )
-
         if self._end_effector == 'jaw':
             self.create_timer(self._load_poll_period_sec, self._on_load_poll_timer)
 
@@ -94,12 +98,12 @@ class EndEffectorCanNode(Node):
                 self.get_logger().warn(f"Ignoring unrecognized command '{command}'.")
             return
 
-        if self._end_effector == 'astrobio':
-            return
         if self._end_effector == 'jaw':
             self._on_jaw_command(command)
         elif self._end_effector == 'drill_sampling':
             self._on_drill_sampling_command(command)
+        elif self._end_effector == 'astrobio':
+            self._on_astrobio_command(command)
 
     def _on_jaw_command(self, command: str):
         if command == 'open':
@@ -128,6 +132,21 @@ class EndEffectorCanNode(Node):
         elif command == 'unlock':
             self._send_cmd(DRILL_SAMPLING_CMD_ID, [DRILL_CMD_UNLOCK])
 
+    def _on_astrobio_command(self, command: str):
+        # 'open'/'close' reused as suck-on/suck-off — same D-pad UP/LEFT
+        # bindings as jaw's gripper open/close (gamepad_servo_node), no
+        # separate command name needed since only one end_effector is ever
+        # active. Confirmed live via cansend can0 01C#01/02/04.
+        if command == 'open':
+            self._send_cmd(ASTROBIO_CMD_ID, [ASTROBIO_CMD_SUCK_ON])
+        elif command == 'close':
+            self._send_cmd(ASTROBIO_CMD_ID, [ASTROBIO_CMD_SUCK_OFF])
+        elif command == 'read_ph':
+            self._send_cmd(ASTROBIO_CMD_ID, [ASTROBIO_CMD_READ_PH])
+        else:
+            self.get_logger().warn(
+                f"'{command}' not supported for end_effector=astrobio.", throttle_duration_sec=1.0)
+
     def _send_cmd(self, can_id: int, data: list):
         msg = Frame()
         msg.id = can_id
@@ -140,6 +159,9 @@ class EndEffectorCanNode(Node):
         self.get_logger().info(f"TX CAN 0x{can_id:03X}  data={[f'0x{b:02X}' for b in data]}")
 
     def _on_can_frame(self, msg: Frame):
+        if self._end_effector == 'astrobio':
+            self._on_astrobio_frame(msg)
+            return
         if self._end_effector != 'jaw':
             return
         if msg.id != JAW_ACK_ID:
@@ -155,6 +177,18 @@ class EndEffectorCanNode(Node):
         self._last_left_g = float(left_g)
         self._last_reply_time = time.monotonic()
         self._publish_state(self._last_right_g, self._last_left_g, connected=True)
+
+    def _on_astrobio_frame(self, msg: Frame):
+        if msg.id != ASTROBIO_REPLY_ID:
+            return
+        # Byte layout of the pH reply is not confirmed yet (only the request
+        # side, 01C#04, was) — log it raw rather than guess a decode here.
+        # Once the layout is known, parse + publish it (new message/field;
+        # EndEffectorState's load_right_g/load_left_g are jaw-specific, not
+        # a fit) instead of just logging.
+        self.get_logger().info(
+            f"RX CAN 0x{msg.id:03X}  data={[f'0x{b:02X}' for b in msg.data[:msg.dlc]]}"
+        )
 
     def _on_load_poll_timer(self):
         self._send_cmd(JAW_CMD_ID, [JAW_CMD_READ_LOAD_SENSORS])

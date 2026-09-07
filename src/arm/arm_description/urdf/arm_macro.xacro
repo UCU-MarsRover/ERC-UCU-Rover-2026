@@ -55,9 +55,9 @@
     <joint name="arm_mount_base_joint" type="revolute">
       <parent link="arm_mount_link"/>
       <child link="arm_base_link"/>
-      <origin xyz="0.06 0 0.021" rpy="0 0 0"/>
+      <origin xyz="0.06 0 0.021" rpy="0 0 ${-pi/2}"/>
       <axis xyz="0 0 1"/>
-      <limit lower="${-2*pi}" upper="${2*pi}" effort="100.0" velocity="1.0"/>
+      <limit lower="${-pi/2}" upper="${pi/2}" effort="100.0" velocity="1.0"/>
     </joint>
 
     <link name="arm_base_link">
@@ -76,7 +76,7 @@
       <child link="arm_shoulder_link"/>
       <origin xyz="-0.040366 -0.000325 0.103" rpy="${pi/3} 0 ${-pi}"/>
       <axis xyz="1 0 0"/>
-      <limit lower="${-2*pi}" upper="${2*pi}" effort="100.0" velocity="1.0"/>
+      <limit lower="${-20*pi/18}" upper="${20*pi/18}" effort="100.0" velocity="1.0"/>
     </joint>
 
     <link name="arm_shoulder_link">
@@ -95,7 +95,7 @@
       <child link="arm_forearm_link"/>
       <origin xyz="0 0.3 0" rpy="${5*pi/12} 0 0"/>
       <axis xyz="1 0 0"/>
-      <limit lower="${-2*pi}" upper="${2*pi}" effort="100.0" velocity="1.0"/>
+      <limit lower="${-pi/2}" upper="${pi/2}" effort="100.0" velocity="1.0"/>
     </joint>
 
     <link name="arm_forearm_link">
@@ -114,7 +114,7 @@
       <child link="arm_wrist_1_link"/>
       <origin xyz="-0.0173 0.3 0" rpy="0 ${pi/2} 0"/>
       <axis xyz="0 0 1"/>
-      <limit lower="${-2*pi}" upper="${2*pi}" effort="100.0" velocity="1.0"/>
+      <limit lower="${-20*pi/18}" upper="${20*pi/18}" effort="100.0" velocity="1.0"/>
     </joint>
 
     <link name="arm_wrist_1_link">
@@ -133,7 +133,7 @@
       <child link="arm_wrist_2_link"/>
       <origin xyz="0.0323 0 -0.035" rpy="${-pi/2} 0 ${pi/2}"/>
       <axis xyz="0 0 1"/>
-      <limit lower="${-2*pi}" upper="${2*pi}" effort="100.0" velocity="1.0"/>
+      <limit lower="${-20*pi/18}" upper="${20*pi/18}" effort="100.0" velocity="1.0"/>
     </joint>
 
     <link name="arm_wrist_2_link">
@@ -152,7 +152,7 @@
       <child link="arm_end_effector_link"/>
       <origin xyz="0.0323 0 -0.035" rpy="${-pi/2} ${pi/3} ${-pi/2}"/>
       <axis xyz="0 0 1"/>
-      <limit lower="${-2*pi}" upper="${2*pi}" effort="100.0" velocity="1.0"/>
+      <limit lower="${-20*pi/18}" upper="${20*pi/18}" effort="100.0" velocity="1.0"/>
     </joint>
 
     <!-- Drill/sample masses+centroids: STL divergence-theorem volumes (not
@@ -162,12 +162,32 @@
          of truth for the drill_sampling tool COM: edit these three, both the
          gravity-comp <param>s below and the TEMP DEBUG VISUAL marker read
          from here. -->
-    <xacro:property name="ee_tool_com_x" value="-0.03"/>
-    <xacro:property name="ee_tool_com_y" value="-0.08"/>
-    <xacro:property name="ee_tool_com_z" value="0.05"/>
+    <xacro:property name="drill_ee_tool_com_x" value="-0.03"/>
+    <xacro:property name="drill_ee_tool_com_y" value="-0.08"/>
+    <xacro:property name="drill_ee_tool_com_z" value="0.05"/>
+
+    <!-- astrobio, physically mounted, has no mesh/finger geometry of its
+         own yet — reuses the jaw STL purely as a visual/collision stand-in
+         (see the xacro:if just below) and the jaw gravity-comp defaults as
+         a starting payload point, both by explicit request. CAN routing
+         (end_effector_can_node.py) and this payload are otherwise fully
+         separate from real jaw: 'astrobio' is its own end_effector value
+         everywhere (safe CAN no-op — no firmware yet — see can_bus.md;
+         its own poses.json "astrobio_home"; its own gravity-comp <param>
+         override below in <ros2_control>, gated on 'astrobio' specifically
+         so real jaw keeps using arm_hardware_interface.hpp's own tuned
+         default, 0.4kg/{0,0,0.06}, untouched). COM not yet measured —
+         starts at jaw's old default, tune against the TEMP DEBUG VISUAL
+         marker below. astrobio has NO finger joints modeled (see the
+         jaw-only xacro:if further below) — it shows as one rigid body,
+         matching that there is nothing to open/close on the CAN side either. -->
+    <xacro:property name="astrobio_ee_tool_mass_kg" value="0.4"/>
+    <xacro:property name="astrobio_ee_tool_com_x" value="0.0"/>
+    <xacro:property name="astrobio_ee_tool_com_y" value="0.0"/>
+    <xacro:property name="astrobio_ee_tool_com_z" value="0.08"/>
 
     <link name="arm_end_effector_link">
-      <xacro:if value="${'$(arg end_effector)' == 'jaw'}">
+      <xacro:if value="${('$(arg end_effector)' == 'jaw') or ('$(arg end_effector)' == 'astrobio')}">
         <visual>
           <geometry><mesh filename="${mesh_path}/arm_jaw_gripper_v3.stl" scale="${stl_scale}"/></geometry>
           <material name="light_grey"/>
@@ -204,8 +224,21 @@
       <xacro:if value="${'$(arg end_effector)' == 'other_tool'}">
         <xacro:dummy_inertia mass="0.2"/>
       </xacro:if>
+      <!-- Matches astrobio_ee_tool_mass_kg above — keep in sync (this is
+           the sim/RViz-facing inertial mass, that one the real gravity-comp
+           payload; same number, two separate places by URDF/ros2_control's
+           own design, not a bug). -->
+      <xacro:if value="${'$(arg end_effector)' == 'astrobio'}">
+        <xacro:dummy_inertia mass="${astrobio_ee_tool_mass_kg}"/>
+      </xacro:if>
     </link>
 
+    <!-- Deliberately gated on 'jaw' ONLY, not astrobio too: astrobio has no
+         known finger/gripper mechanism (real hardware has no firmware for
+         it yet — see can_bus.md), so it gets no prismatic finger joints and
+         no gripper_right/left_controller (arm_bringup/arm.launch.py's own
+         gripper spawner condition is 'jaw' only already). It shows as one
+         rigid body reusing the jaw mesh above, nothing to open/close. -->
     <xacro:if value="${'$(arg end_effector)' == 'jaw'}">
       <!-- v3: no CAD dimension doc available (unlike v2 above). Derived from
            the STL geometry itself: arm_jaw_gripper_finger_v3.stl is exported
@@ -294,7 +327,7 @@
       <parent link="arm_end_effector_link"/>
       <child link="arm_tcp_link"/>
       
-      <xacro:if value="${('$(arg end_effector)' == 'jaw') or ('$(arg end_effector)' == 'drill_sampling')}">
+      <xacro:if value="${('$(arg end_effector)' == 'jaw') or ('$(arg end_effector)' == 'drill_sampling') or ('$(arg end_effector)' == 'astrobio')}">
         <!-- v3: X=Y=0 by construction (right/left fingers are the same mesh
              mirrored 180 deg about Z through the shared origin, see the
              finger properties comment above, so that origin is the natural
@@ -310,11 +343,15 @@
              and matches the SRDF's own tip_link convention for
              arm_tcp_link (indomitus_arm.srdf).
              drill_sampling deliberately shares this same point/axis (drill
-             mode rolls about arm_tcp_link's local Z). -->
+             mode rolls about arm_tcp_link's local Z). astrobio shares it
+             too: it reuses the jaw mesh (no fingers of its own — see the
+             xacro:if gating those, jaw-only), so its TCP is placed at the
+             same fingertip point that mesh actually renders at. Revisit
+             once astrobio has real geometry/reach of its own. -->
         <origin xyz="0 0 0.1615" rpy="0 0 0"/>
       </xacro:if>
 
-      <xacro:if value="${('$(arg end_effector)' != 'jaw') and ('$(arg end_effector)' != 'drill_sampling')}">
+      <xacro:if value="${('$(arg end_effector)' != 'jaw') and ('$(arg end_effector)' != 'drill_sampling') and ('$(arg end_effector)' != 'astrobio')}">
         <origin xyz="0 -0.23 0" rpy="0 0 0"/>
       </xacro:if>
     </joint>
@@ -384,16 +421,19 @@
     <link name="arm_camera_optical_frame"/>
 
     <!-- TEMP DEBUG VISUAL — sanity-check the assumed tool COM against the
-         real one by eye in RViz. Safe to delete this whole xacro:if block
-         when done; not wired into collision (visual only). Reads
-         ee_tool_com_x/y/z (declared above, also used by the gravity-comp
+         real one by eye in RViz, one red ball per end_effector. Safe to
+         delete this whole macro + xacro:if pair when done; not wired into
+         collision (visual only). Each branch reads that tool's own
+         *_ee_tool_com_x/y/z (declared above, also used by the gravity-comp
          <param>s in <ros2_control> below) — edit the properties, not this
-         origin, and both stay in sync automatically. -->
-    <xacro:if value="${'$(arg end_effector)' == 'drill_sampling'}">
+         origin, and both stay in sync automatically. Only one xacro:if
+         below is ever true for a given end_effector, so both are safe to
+         emit the same joint/link name. -->
+    <xacro:macro name="ee_tool_com_debug_marker" params="com_x com_y com_z">
       <joint name="arm_end_effector_com_debug_joint" type="fixed">
         <parent link="arm_end_effector_link"/>
         <child link="arm_end_effector_com_debug_link"/>
-        <origin xyz="${ee_tool_com_x} ${ee_tool_com_y} ${ee_tool_com_z}" rpy="0 0 0"/>
+        <origin xyz="${com_x} ${com_y} ${com_z}" rpy="0 0 0"/>
       </joint>
       <link name="arm_end_effector_com_debug_link">
         <visual>
@@ -403,6 +443,19 @@
           </material>
         </visual>
       </link>
+    </xacro:macro>
+
+    <!-- No jaw branch here on purpose: real jaw's COM lives only in
+         arm_hardware_interface.hpp's own C++ default (0.4kg/{0,0,0.06}),
+         not exposed as an xacro property, so there is nothing for this
+         marker to read for end_effector:=jaw. -->
+    <xacro:if value="${'$(arg end_effector)' == 'astrobio'}">
+      <xacro:ee_tool_com_debug_marker
+        com_x="${astrobio_ee_tool_com_x}" com_y="${astrobio_ee_tool_com_y}" com_z="${astrobio_ee_tool_com_z}"/>
+    </xacro:if>
+    <xacro:if value="${'$(arg end_effector)' == 'drill_sampling'}">
+      <xacro:ee_tool_com_debug_marker
+        com_x="${drill_ee_tool_com_x}" com_y="${drill_ee_tool_com_y}" com_z="${drill_ee_tool_com_z}"/>
     </xacro:if>
 
     <ros2_control name="ArmSystem" type="system">
@@ -441,12 +494,21 @@
                  for gravity compensation — see arm_end_effector_link above
                  for how these were computed and cross-checked. jaw and
                  other_tool are left unset on purpose: ArmCanSystem's own
-                 defaults (0.4 kg, {0,0,0.06}) are the live-tuned jaw value
-                 from arm_hardware_interface.cpp — do not duplicate it here. -->
+                 defaults (0.4 kg, {0,0,0.06}) are the real jaw tool's tuned
+                 value from arm_hardware_interface.cpp — do not duplicate it
+                 here. astrobio DOES get an explicit override below — see
+                 astrobio_ee_tool_mass_kg/com_{x,y,z}'s own comment up at
+                 arm_end_effector_link. -->
+            <xacro:if value="${'$(arg end_effector)' == 'astrobio'}">
+              <param name="ee_tool_mass_kg">${astrobio_ee_tool_mass_kg}</param>
+              <param name="ee_tool_com_x">${astrobio_ee_tool_com_x}</param>
+              <param name="ee_tool_com_y">${astrobio_ee_tool_com_y}</param>
+              <param name="ee_tool_com_z">${astrobio_ee_tool_com_z}</param>
+            </xacro:if>
             <xacro:if value="${'$(arg end_effector)' == 'drill_sampling'}">
               <!-- Mass-weighted COM of drill (2.0kg) + sample (0.6kg), raw-frame
                    value rotated to match the <origin rpy="0 pi pi/2"> above —
-                   keep in sync if that changes. Values (ee_tool_com_x/y/z
+                   keep in sync if that changes. Values (drill_ee_tool_com_x/y/z
                    properties, declared up at arm_end_effector_link) have been
                    retuned repeatedly on explicit request after live testing
                    showed too much gravity-holding torque (arm drifting/
@@ -455,9 +517,9 @@
                    Edit the xacro:property values, not these <param>s — the
                    TEMP DEBUG VISUAL marker above reads the same properties. -->
               <param name="ee_tool_mass_kg">2.8</param>
-              <param name="ee_tool_com_x">${ee_tool_com_x}</param>
-              <param name="ee_tool_com_y">${ee_tool_com_y}</param>
-              <param name="ee_tool_com_z">${ee_tool_com_z}</param>
+              <param name="ee_tool_com_x">${drill_ee_tool_com_x}</param>
+              <param name="ee_tool_com_y">${drill_ee_tool_com_y}</param>
+              <param name="ee_tool_com_z">${drill_ee_tool_com_z}</param>
             </xacro:if>
           </xacro:unless>
         </xacro:unless>

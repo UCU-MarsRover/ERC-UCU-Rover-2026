@@ -1,14 +1,1 @@
-# Hand the PlayStation controller light bar to the 'plugdev' group so
-# joystick_interpreter can paint it with the drive state without running as
-# root. Both shapes come from the same kernel driver (hid-playstation);
-# DRIVERS=="playstation" matches the parent HID device and keeps these rules
-# off every other LED on the host.
-
-# DualSense: one multicolour LED. multi_intensity carries the RGB triple,
-# brightness is the master scale and must be writable too.
-ACTION=="add", SUBSYSTEM=="leds", DRIVERS=="playstation", KERNEL=="*:rgb:indicator", \
-  RUN+="/bin/sh -c 'chgrp plugdev /sys%p/multi_intensity /sys%p/brightness && chmod g+w /sys%p/multi_intensity /sys%p/brightness'"
-
-# DualShock 4: three single-colour LEDs plus a ':global' on/off gate.
-ACTION=="add", SUBSYSTEM=="leds", DRIVERS=="playstation", KERNEL=="*:red|*:green|*:blue|*:global", \
-  RUN+="/bin/sh -c 'chgrp plugdev /sys%p/brightness && chmod g+w /sys%p/brightness'"
+SUBSYSTEM=="hidraw", MODE="0666"
