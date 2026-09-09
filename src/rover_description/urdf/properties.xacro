@@ -28,13 +28,18 @@
   <xacro:property name="rocker_height" value="0.187"/>  <!-- Z -->
   <xacro:property name="rocker_mass" value="1.0"/>
 
-  <!-- Mesh alignment: centers rocker.stl on the rocker link's own origin -->
-  <xacro:property name="rocker_mesh_align_xyz" value="0 0.0001 0.0"/>
+  <!-- Mesh alignment: centers rocker.stl on the rocker link's own origin. The left
+       rocker's mesh is yawed 180 deg, so its Y correction is not a mirror of the right. -->
+  <xacro:property name="rocker_mesh_align_y_left" value="-0.02"/>
+  <xacro:property name="rocker_mesh_align_y_right" value="0.02"/>
 
   <!-- Wheel-mount attachment point: where the wheel_mount hub attaches to the rocker's end,
        relative to the rocker's pivot origin -->
+  <!-- Lateral offset stays 0: the steering axis and wheel centre sit on the rocker
+       pivot plane, so wheel centres land at +/-track_width/2, which is what
+       swerve_kinematics and the odometry in controllers.yaml assume. -->
   <xacro:property name="rocker_mount_x_offset" value="0.050"/>
-  <xacro:property name="rocker_hub_y" value="-0.0258"/>
+  <xacro:property name="rocker_hub_y" value="0.0"/>
   <xacro:property name="rocker_hub_z" value="-0.1140"/>
 
   <!-- ===================== WHEEL MOUNT (steering knuckle) ===================== -->
@@ -45,12 +50,12 @@
   <xacro:property name="wheel_mount_mass" value="0.162"/>
 
   <!-- Mesh alignment: centers wheel_mount.stl's steering bore on the link's own origin -->
-  <xacro:property name="wheel_mount_hub_offset" value="0.1253"/>
-  <xacro:property name="wheel_mount_visual_z" value="-0.1814"/>
+  <xacro:property name="wheel_mount_hub_offset" value="0.1489"/>
+  <xacro:property name="wheel_mount_visual_z" value="-0.1799"/>
 
   <!-- Wheel attachment point: axle position relative to the steering bore -->
   <xacro:property name="wheel_mount_drop" value="0.1857"/>
-  <xacro:property name="axle_lateral_offset" value="-0.0168"/>
+  <xacro:property name="axle_lateral_offset" value="0.0"/>
 
   <!-- ===================== WHEEL ===================== -->
   <!-- Geometry -->

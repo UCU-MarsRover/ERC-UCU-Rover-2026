@@ -14,7 +14,9 @@
         <xacro:box_inertia m="${rocker_mass}" x="${rocker_length}" y="${rocker_width}" z="${rocker_height}"/>
       </inertial>
       <visual>
-        <origin xyz="${rocker_mesh_align_xyz}" rpy="0 0 ${-pi / 2.0}"/>
+        <!-- rocker.stl is not a mirrored pair; the left one is yawed 180 deg so
+             the same mesh faces the right way on both sides. -->
+        <origin xyz="0 ${rocker_mesh_align_y_left if y_sign > 0 else rocker_mesh_align_y_right} 0" rpy="0 0 ${pi / 2.0 * y_sign}"/>
         <geometry>
           <mesh filename="package://rover_description/meshes/suspension/rocker.stl" scale="1 1 1"/>
         </geometry>

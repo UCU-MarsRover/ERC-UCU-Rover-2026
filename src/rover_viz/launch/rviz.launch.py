@@ -13,7 +13,7 @@ from launch_ros.actions import Node, PushRosNamespace
 def urdf() -> str:
     urdf_xacro = os.path.join(
         get_package_share_directory('rover_description'),
-        'urdf', 'rover.urdf.xacro',
+        'urdf', 'rover.xacro',
     )
     try:
         doc = xacro.process_file(urdf_xacro)

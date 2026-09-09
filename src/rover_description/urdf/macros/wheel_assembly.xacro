@@ -13,7 +13,7 @@
         <xacro:box_inertia m="${wheel_mount_mass}" x="${wheel_mount_length}" y="${wheel_mount_width}" z="${wheel_mount_height}"/>
       </inertial>
       <visual>
-        <origin xyz="0 ${wheel_mount_hub_offset * y_sign} ${wheel_mount_visual_z}" rpy="0 0 0"/>
+        <origin xyz="0.001 ${wheel_mount_hub_offset * y_sign} ${wheel_mount_visual_z}" rpy="0 0 0"/>
         <geometry>
           <mesh filename="package://rover_description/meshes/suspension/wheel_mount.stl" scale="1 ${y_sign} 1"/>
         </geometry>
@@ -31,7 +31,7 @@
     <joint name="${prefix}_wheel_mount_joint" type="revolute">
       <parent link="${parent}"/>
       <child link="${prefix}_wheel_mount_link"/>
-      <origin xyz="${x_sign * (rocker_length / 2.0 - rocker_mount_x_offset)} ${rocker_hub_y} ${rocker_hub_z}" rpy="0 0 0"/>
+      <origin xyz="${x_sign * (rocker_length / 2.0 - rocker_mount_x_offset)} ${rocker_hub_y * y_sign} ${rocker_hub_z}" rpy="0 0 0"/>
       <axis xyz="0 0 1"/>
       <limit lower="${-steering_limit}" upper="${steering_limit}" effort="${steering_effort}" velocity="${steering_velocity}"/>
       <dynamics damping="0.5" friction="0.3"/>
