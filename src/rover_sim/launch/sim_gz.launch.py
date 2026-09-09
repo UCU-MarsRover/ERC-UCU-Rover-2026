@@ -398,16 +398,9 @@ def generate_launch_description() -> LaunchDescription:
                 }
             ),
 
-            # A GroupAction's pushed namespace is popped as soon as its own
-            # action list has been visited - since TimerAction only visits
-            # its own actions later, once the timer actually fires, the push
-            # above is long gone by then unless it's re-applied here too.
             TimerAction(
                 period=LaunchConfiguration("spawn_delay"),
-                actions=[GroupAction([
-                    PushRosNamespace(LaunchConfiguration("rover_namespace")),
-                    make_spawn_node(model_name_sub, spawn_x_sub, spawn_y_sub, spawn_z_sub),
-                ])]
+                actions=[make_spawn_node(model_name_sub, spawn_x_sub, spawn_y_sub, spawn_z_sub)]
             ),
 
             include_launch("rover_localization", "ekf.launch.py", {
