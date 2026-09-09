@@ -88,16 +88,16 @@
 
     # The swerve_controller block above omits these and silently takes the
     # code defaults (0.797 / 0.644 / 0.156); set them here to match odometry.
-    wheelbase:    0.797
+    wheelbase:    0.806
     track_width:  0.642
-    wheel_radius: 0.153
+    wheel_radius: 0.150
 
 /**/odometry_controller:
   ros__parameters:
     odom_topic: "wheels/odom"
-    wheelbase: 0.797
+    wheelbase: 0.807
     track_width: 0.642
-    wheel_radius: 0.153
+    wheel_radius: 0.150
     steer_joint_names:
       - fl_wheel_mount_joint
       - fr_wheel_mount_joint
