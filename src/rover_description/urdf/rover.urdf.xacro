@@ -109,18 +109,22 @@
   </joint>
 
   <!-- ===================== ZED2i STEREO CAMERA ===================== -->
-  <xacro:stereo_camera
-    use_sim="$(arg use_sim)"
-    simulate_rgb="$(arg stereo_camera_simulate_rgb)"
-    simulate_depth="$(arg stereo_camera_simulate_depth)"
-    simulate_imu="$(arg stereo_camera_simulate_imu)"
-  />
+  <!-- Both the macro call and the joint are guarded: the joint's child link is
+       created by the macro, so neither can stand without the other. -->
+  <xacro:if value="$(arg use_stereo_camera)">
+    <xacro:stereo_camera
+      use_sim="$(arg use_sim)"
+      simulate_rgb="$(arg stereo_camera_simulate_rgb)"
+      simulate_depth="$(arg stereo_camera_simulate_depth)"
+      simulate_imu="$(arg stereo_camera_simulate_imu)"
+    />
 
-  <joint name="zed2i_base_joint" type="fixed">
-    <parent link="main_body_link"/>
-    <child link="zed2i_camera_link"/>
-    <origin xyz="${zed2i_x} ${zed2i_y} ${zed2i_z}" rpy="${zed2i_rx} ${zed2i_ry} ${zed2i_rz}"/>
-  </joint>
+    <joint name="zed2i_base_joint" type="fixed">
+      <parent link="main_body_link"/>
+      <child link="zed2i_camera_link"/>
+      <origin xyz="${zed2i_x} ${zed2i_y} ${zed2i_z}" rpy="${zed2i_rx} ${zed2i_ry} ${zed2i_rz}"/>
+    </joint>
+  </xacro:if>
 
   <!-- ===================== RPLIDAR S2 ===================== -->
   <xacro:lidar

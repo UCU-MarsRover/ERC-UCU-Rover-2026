@@ -1,5 +1,5 @@
 import os
-from typing import List
+from typing import Dict, List, Optional
 
 import launch.actions
 import xacro
@@ -10,13 +10,13 @@ from launch.utilities import perform_substitutions
 from launch_ros.actions import Node, PushRosNamespace
 
 
-def urdf() -> str:
+def urdf(mappings: Optional[Dict[str, str]] = None) -> str:
     urdf_xacro = os.path.join(
         get_package_share_directory('rover_description'),
         'urdf', 'rover.xacro',
     )
     try:
-        doc = xacro.process_file(urdf_xacro)
+        doc = xacro.process_file(urdf_xacro, mappings=mappings or {})
         return doc.toprettyxml(indent='  ')
     except Exception as e:
         print(f"Error processing URDF: {e}")
@@ -32,13 +32,16 @@ def launch_nodes(context: LaunchContext,
     use_nav   = kwargs.get('use_nav',   'false').lower() == 'true'
     use_rviz  = kwargs.get('use_rviz',  'true').lower()  == 'true'
     use_joint_gui = kwargs.get('use_joint_state_publisher_gui', 'true').lower() == 'true'
+    # Kept as a string rather than a bool: it is handed straight to xacro, whose
+    # mappings must be strings, and xacro only accepts lowercase true/false.
+    use_stereo_camera = kwargs.get('use_stereo_camera', 'true').lower()
 
     nodes = []
 
     # When running alongside the simulator, robot_state_publisher and
     # joint_state_publisher are already started by the sim launch file.
     if not use_sim:
-        urdf_string = urdf()
+        urdf_string = urdf({'use_stereo_camera': use_stereo_camera})
         nodes.append(Node(
             package='robot_state_publisher',
             executable='robot_state_publisher',
@@ -95,6 +98,13 @@ def generate_launch_description():
             description='Use joint_state_publisher_gui instead of joint_state_publisher.',
         ),
         launch.actions.DeclareLaunchArgument(
+            'use_stereo_camera', default_value='true',
+            description='Include the ZED2i in the robot description. Set false where the '
+                        'ZED ROS 2 wrapper is unavailable: the URDF resolves '
+                        '$(find zed_description), so without it the description fails to '
+                        'build and RViz comes up with no robot.',
+        ),
+        launch.actions.DeclareLaunchArgument(
             'rover_namespace',
             default_value=EnvironmentVariable('ROVER_NAMESPACE', default_value='rover'),
             description='ROS namespace all rover nodes/topics are pushed under (arm excluded). '
@@ -110,6 +120,8 @@ def generate_launch_description():
                     'use_rviz':  launch.substitutions.LaunchConfiguration('use_rviz'),
                     'use_joint_state_publisher_gui': launch.substitutions.LaunchConfiguration(
                         'use_joint_state_publisher_gui'),
+                    'use_stereo_camera': launch.substitutions.LaunchConfiguration(
+                        'use_stereo_camera'),
                 },
             ),
         ]),

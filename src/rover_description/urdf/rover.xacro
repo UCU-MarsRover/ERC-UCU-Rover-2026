@@ -13,6 +13,13 @@
        depends on) is namespaced. -->
   <xacro:arg name="rover_namespace" default="rover"/>
 
+  <!-- Set false to leave the ZED2i out of the model entirely: its links, its
+       joint to main_body_link, and the $(find zed_description) lookup that the
+       stereo_camera macro performs. Needed wherever the ZED ROS 2 wrapper
+       (which provides zed_description) is not installed, since xacro resolves
+       that package the moment the macro is instantiated. -->
+  <xacro:arg name="use_stereo_camera" default="true"/>
+
   <!-- Sensor Simulation Arguments -->
   <xacro:arg name="lidar_simulate_scan" default="false"/>
   <xacro:arg name="stereo_camera_simulate_rgb" default="false"/>
