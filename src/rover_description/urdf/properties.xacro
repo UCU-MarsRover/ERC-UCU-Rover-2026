@@ -86,8 +86,8 @@
   <xacro:property name="drive_velocity" value="10"/>
 
   <!-- ===================== WHEEL GROUND CONTACT FRICTION ===================== -->
-  <xacro:property name="wheel_mu1" value="1.0"/>
-  <xacro:property name="wheel_mu2" value="1.0"/>
+  <xacro:property name="wheel_mu1" value="1.2"/>
+  <xacro:property name="wheel_mu2" value="1.2"/>
   <xacro:property name="wheel_kp" value="1000000.0"/>
   <xacro:property name="wheel_kd" value="1.0"/>
 

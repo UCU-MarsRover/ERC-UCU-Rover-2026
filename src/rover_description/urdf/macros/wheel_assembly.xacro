@@ -45,9 +45,11 @@
         <xacro:cylinder_inertia m="${wheel_mass}" r="${wheel_radius}" h="${wheel_width}"/>
       </inertial>
       <visual>
-        <origin xyz="0 ${wheel_hub_offset * y_sign} 0" rpy="0 0 0"/>
+        <!-- Right wheel is yawed 180 deg rather than scaled by -1: a negative
+             scale flips polygon winding, inverting the mesh normals. -->
+        <origin xyz="0 ${wheel_hub_offset * y_sign} 0" rpy="0 0 ${0 if y_sign > 0 else pi}"/>
         <geometry>
-          <mesh filename="package://rover_description/meshes/suspension/wheel.stl" scale="1 ${y_sign} 1"/>
+          <mesh filename="package://rover_description/meshes/suspension/wheel.stl" scale="1 1 1"/>
         </geometry>
         <material name="dark_wheel"/>
       </visual>
