@@ -100,3 +100,65 @@ Used IDs: [config/lights.yaml](config/lights.yaml)
 
 Traffic-light bitmask is `R=bit0 Y=bit1 G=bit2 B=bit3`, computed in the node
 from its own state — the firmware protocol did not change.
+
+`0x300` / `0x301` are shared with `power_node` (same ESP32, see below). Both
+nodes match on the echoed command byte and ignore ACKs for commands they did
+not send, so neither steals the other's reply.
+
+## Power monitor (Lights ESP)
+
+The two INA228 current sensors live on the same ESP32 as the lights, so
+`power_node` and `lights_can_node` share one CAN command/response id pair
+(`0x300` / `0x301`) and tell their traffic apart by the echoed command byte.
+
+### Launch file & prerequisites
+
+> ⚠️ Warning: This launch file assumes that ros2_socketcan is already running!
+
+```bash
+ros2 launch rover_peripherals power_monitor_node.launch.py
+```
+
+Included by `rover_bringup/launch/rover.launch.py`.
+
+### ROS2 Interface details
+
+The firmware boots with **both sensors off** and polls each one only while it
+is enabled, so `power_node` owns the enable side too: it turns its sensors on
+`enable_on_start_delay_s` after start, and turns them off again on exit so a
+stopped node does not leave the ESP32 pushing frames nobody reads.
+
+**Topics** — one `sensor_msgs/BatteryState` per sensor, at 5 Hz while enabled:
+
+| Topic | Sensor |
+|---|---|
+| `/power_monitor/sensor_rover` | INA228 #1, I2C `0x45`, CAN `0x302` |
+| `/power_monitor/sensor_arm` | INA228 #2, I2C `0x44`, CAN `0x303` |
+
+`.voltage` is volts, `.current` is amps — the ESP32 has already applied the
+INA228 LSB, so nothing is scaled on this side. `.location` carries the sensor
+name, which is what tells two otherwise identical messages apart if they are
+merged downstream.
+
+**Services** (`std_srvs/SetBool`) — for silencing a sensor that is faulty or
+unpopulated, and for cutting the telemetry when the bus is busy:
+
+| Service | Meaning |
+|---|---|
+| `/power_monitor/sensor_rover/enable` | enable/disable sensor 1 only |
+| `/power_monitor/sensor_arm/enable` | enable/disable sensor 2 only |
+| `/power_monitor/enable` | enable/disable every sensor in one frame |
+
+```bash
+ros2 service call /power_monitor/sensor_arm/enable std_srvs/srv/SetBool "{data: false}"
+ros2 service call /power_monitor/enable std_srvs/srv/SetBool "{data: true}"
+```
+
+A disabled sensor simply stops publishing; the topic stays advertised and the
+node stays healthy. The QoS is `SENSOR_DATA` (best-effort, volatile, not
+latched), so a consumer that needs to tell "off" from "dead" should watch the
+message timestamps rather than the topic list.
+
+### CAN interface
+
+Used IDs: [config/power_node.yaml](config/power_node.yaml)

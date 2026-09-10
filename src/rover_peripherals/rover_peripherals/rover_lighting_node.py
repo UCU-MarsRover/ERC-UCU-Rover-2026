@@ -121,6 +121,13 @@ class LightsCanNode(Node):
         self._last_state_publish = 0.0
 
         self._lights = self._build_light_specs()
+        # Every command byte this node is the author of. power_monitor_can_node
+        # drives the same ESP32 over the same cmd/resp id pair, so the response
+        # stream carries ACKs that are none of our business - this is what
+        # tells one from the other.
+        self._own_cmds = {self._cmd_traffic_light}
+        for spec in self._lights.values():
+            self._own_cmds.update((spec.on_cmd, spec.off_cmd))
 
         # --- CAN pub/sub ---
         self._pub = self.create_publisher(Frame, "to_can_bus", 10)
@@ -512,6 +519,9 @@ class LightsCanNode(Node):
 
         cmd    = msg.data[0]
         status = msg.data[1]
+
+        if cmd not in self._own_cmds:
+            return  # another node's command echoed back, not ours to read
 
         self.get_logger().info(
             f"RX CAN 0x{self._resp_id:03X}  cmd=0x{cmd:02X}  status=0x{status:02X}"

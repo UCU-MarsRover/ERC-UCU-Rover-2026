@@ -37,6 +37,10 @@
       cmd_tower_on:               0x2C
       cmd_tower_off:              0x2D
 
+      # 0x10-0x15 are the power telemetry commands on this same ESP32 - see
+      # power_node.yaml. power_node sends them and matches its own ACKs off
+      # resp_id, so do not reassign them to a light here.
+
       # Status responses from ESP32
       status_ok:    0x00
       status_error: 0x01

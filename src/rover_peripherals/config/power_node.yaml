@@ -6,6 +6,45 @@
       - "sensor_rover"
       - "sensor_arm"
 
+    # Telemetry frame the ESP32 pushes for each sensor
     sensor_can_ids:
-      - 770   # 0x302
-      - 771   # 0x303
+      - 770   # 0x302  INA228 #1 (I2C 0x45)
+      - 771   # 0x303  INA228 #2 (I2C 0x44)
+
+    # Per-sensor enable/disable commands, sent on can.cmd_id byte 0
+    sensor_cmd_enable:
+      - 0x12
+      - 0x14
+    sensor_cmd_disable:
+      - 0x13
+      - 0x15
+
+    can:
+      # Shared with lights_can_node - same ESP32, same command/response pair.
+      # Both nodes match on the echoed command byte so neither steals the
+      # other's ACK.
+      cmd_id:  0x300
+      resp_id: 0x301
+
+      # Act on every sensor the firmware knows about, in one frame
+      cmd_telemetry_all_enable:  0x10
+      cmd_telemetry_all_disable: 0x11
+
+      status_ok:    0x00
+      status_error: 0x01
+
+    # The firmware boots with both sensors off, so somebody has to turn them
+    # on. Delay gives the executor time to come up before we block on an ACK.
+    # Retried because the ESP32 and the Jetson boot together: the first
+    # attempt often lands before the firmware answers. Each attempt costs up
+    # to timeouts.ack_s, so 10 covers roughly 20 s of a slow ESP boot.
+    enable_on_start: true
+    enable_on_start_delay_s: 1.0
+    enable_on_start_retries: 10
+
+    # Silence the sensors on exit so a stopped node does not leave the ESP32
+    # pushing a frame per sensor every 200 ms at nobody.
+    disable_on_shutdown: true
+
+    timeouts: # in seconds
+      ack_s: 2.0
